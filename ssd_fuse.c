@@ -46,7 +46,7 @@ unsigned int* L2P;
 static int ssd_resize(size_t new_size)
 {
     //set logic size to new_size
-    if (new_size > LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024  )
+    if (new_size > LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024)
     {
         return -ENOMEM;
     }
@@ -193,6 +193,7 @@ static unsigned int get_next_pca()
 static int ftl_read( char* buf, size_t lba)
 {
     /*  TODO: 1. Check L2P to get PCA 2. Send read data into nand_read */
+    /* DONE */
     PCA_RULE pca;
     pca.pca = L2P[lba];
     
@@ -216,7 +217,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     if (nand_write(buf, pca.pca) > 0)
     {
         L2P[lba] = pca.pca;
-        return 512 ;
+        return 512;
     }
     else
     {
@@ -275,6 +276,7 @@ static int ssd_open(const char* path, struct fuse_file_info* fi)
 static int ssd_do_read(char* buf, size_t size, off_t offset)
 {
     /*  TODO: call ftl_read function and handle result */
+    /* DONE */
     int tmp_lba, tmp_lba_range, rst;
     char* tmp_buf;
 
@@ -294,7 +296,21 @@ static int ssd_do_read(char* buf, size_t size, off_t offset)
     tmp_buf = calloc(tmp_lba_range * 512, sizeof(char));
 
     for (int i = 0; i < tmp_lba_range; i++) {
-        // TODO
+        // TODOS
+        int step = i * 512;
+        // read data from ftl and store in tmp_buf
+        rst = ftl_read(tmp_buf + step, tmp_lba + i);
+        if (rst < 0)
+        {
+            free(tmp_buf);
+            return rst;
+        }
+        
+        if (rst == 0)
+        {
+           // not data, rewrite data to 0
+           memset(tmp_buf + step, 0, 512);
+        }
     }
 
     memcpy(buf, tmp_buf + offset % 512, size);
@@ -302,6 +318,7 @@ static int ssd_do_read(char* buf, size_t size, off_t offset)
     free(tmp_buf);
     return size;
 }
+
 static int ssd_read(const char* path, char* buf, size_t size,
                     off_t offset, struct fuse_file_info* fi)
 {
