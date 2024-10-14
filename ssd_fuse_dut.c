@@ -108,7 +108,7 @@ int main(int argc, char** argv)
                 return 1;
             }
             if (ioctl(fd, SSD_GET_LOGIC_SIZE, &size))
-            {
+            {   
                 perror("ioctl");
                 goto error;
             }

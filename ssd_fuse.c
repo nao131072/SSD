@@ -14,14 +14,13 @@
 #include <time.h>
 #include <errno.h>
 #include "ssd_fuse_header.h"
-#define SSD_NAME       "ssd_file"
+#define SSD_NAME "ssd_file"
 enum
 {
     SSD_NONE,
     SSD_ROOT,
     SSD_FILE,
 };
-
 
 static size_t physic_size;
 static size_t logic_size;
@@ -35,13 +34,26 @@ union pca_rule
     struct
     {
         unsigned int page : 16;
-        unsigned int block: 16;
+        unsigned int block : 16;
     } fields;
 };
 
 PCA_RULE curr_pca;
 
 unsigned int* L2P;
+
+static int ftl_gc()
+{
+    /*
+        Copilot code follows
+    */
+    //  1. Decide the source block to be erased
+    //  2. Move all the valid data in source block to another block
+    //  3. Update L2P table
+    //  4. Erase the source block with invalid data
+    
+    
+}
 
 static int ssd_resize(size_t new_size)
 {
@@ -158,7 +170,7 @@ static unsigned int get_next_pca()
 {
     /*  TODO: seq A, need to change to seq B */
 	
-    if (curr_pca.pca == INVALID_PCA)
+     if (curr_pca.pca == INVALID_PCA)
     {
         //init
         curr_pca.pca = 0;
@@ -170,14 +182,15 @@ static unsigned int get_next_pca()
         printf("No new PCA\n");
         return FULL_PCA;
     }
-
-    if ( curr_pca.fields.block == PHYSICAL_NAND_NUM - 1)
+    
+    //
+    if ( curr_pca.fields.page == (NAND_SIZE_KB * 1024 / 512)-1)
     {
-        curr_pca.fields.page += 1;
+        curr_pca.fields.block += 1;
     }
-    curr_pca.fields.block = (curr_pca.fields.block + 1 ) % PHYSICAL_NAND_NUM;
+    curr_pca.fields.page = (curr_pca.fields.page + 1 ) % (NAND_SIZE_KB * 1024 / 512);
 
-    if ( curr_pca.fields.page >= (NAND_SIZE_KB * 1024 / 512) )
+    if ( curr_pca.fields.block >= PHYSICAL_NAND_NUM)
     {
         printf("No new PCA\n");
         curr_pca.pca = FULL_PCA;
@@ -214,8 +227,13 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     PCA_RULE pca;
     pca.pca = get_next_pca();
 
-    if (nand_write(buf, pca.pca) > 0)
+    if (pca.pca == FULL_PCA)
     {
+        return -ENOMEM;
+    }
+    
+    if (nand_write(buf, pca.pca) > 0)
+    {   
         L2P[lba] = pca.pca;
         return 512;
     }
@@ -308,7 +326,7 @@ static int ssd_do_read(char* buf, size_t size, off_t offset)
         
         if (rst == 0)
         {
-           // not data, rewrite data to 0
+           // no data, rewrite data to 0
            memset(tmp_buf + step, 0, 512);
         }
     }
@@ -421,8 +439,7 @@ static int ssd_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
 
 static int ssd_ioctl(const char* path, unsigned int cmd, void* arg,
                      struct fuse_file_info* fi, unsigned int flags, void* data)
-{
-
+{   
     if (ssd_file_type(path) != SSD_FILE)
     {
         return -EINVAL;
