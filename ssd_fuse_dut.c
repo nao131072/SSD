@@ -99,7 +99,7 @@ int main(int argc, char** argv)
         }
     }
     switch (cmd)
-    {
+    {   
         case 'l':
             fd = open(path, O_RDWR);
             if (fd < 0)

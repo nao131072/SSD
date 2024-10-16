@@ -42,8 +42,46 @@ PCA_RULE curr_pca;
 
 unsigned int* L2P;
 
+int reserve_block = PHYSICAL_NAND_NUM - 1;
+
+int invalid_counts[PHYSICAL_NAND_NUM] = {0};
+
+static int nand_write(const char* buf, int pca);
+static int nand_read(char* buf, int pca);
+static int nand_erase(int block);
+
+static int get_most_invalid_block()
+{
+    int max_invalid_block = 0;
+    int invalid_counts[PHYSICAL_NAND_NUM];
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++) invalid_counts[i] = 0;
+    
+    // count invalid pages
+    for (int i = 0; i < L2P_SIZE; i++)
+    {
+        if (L2P[i] == INVALID_PCA)
+        {
+            int block = i / PAGE_PER_BLOCK;
+            invalid_counts[block]++;
+        }
+    }
+    
+    // find the most dirty block
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        printf("invalid_counts[%d] = %d\n", i, invalid_counts[i]);
+        if (invalid_counts[i] > invalid_counts[max_invalid_block])
+        {
+            max_invalid_block = i;
+        }
+    }
+    
+    return max_invalid_block;
+}
+
 static int ftl_gc()
 {
+    // DONE
     /*
         Copilot code follows
     */
@@ -52,7 +90,64 @@ static int ftl_gc()
     //  3. Update L2P table
     //  4. Erase the source block with invalid data
     
+    // 1. Decide the source block to be erased
+    // by choosing the most dirty block (the block with the most invalid data)    
     
+    int max_invalid_block = 0;
+    int invalid_counts[PHYSICAL_NAND_NUM];
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++) invalid_counts[i] = 0;
+    
+    // count invalid pages
+    for (int i = 0; i < L2P_SIZE; i++)
+    {
+        if (L2P[i] == INVALID_PCA)
+        {
+            int block = i / PAGE_PER_BLOCK;
+            invalid_counts[block]++;
+        }
+    }
+    
+    // find the most dirty block
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        printf("invalid_counts[%d] = %d\n", i, invalid_counts[i]);
+        if (invalid_counts[i] > invalid_counts[max_invalid_block])
+        {
+            max_invalid_block = i;
+        }
+    }
+    
+    // 2. Move all the valid data in source block to another block
+    curr_pca.fields.block = max_invalid_block;
+    curr_pca.fields.page = 0;
+    
+    PCA_RULE to_pca;
+    to_pca.fields.block = reserve_block;
+    to_pca.fields.page = 0;
+    
+    
+    for (int i = 0; i < PAGE_PER_BLOCK; i++)
+    {
+        int lba = max_invalid_block * PAGE_PER_BLOCK + i;
+        
+        if (L2P[lba] != INVALID_PCA)
+        {
+            printf("Moving LBA %d from block %d to block %d\n", lba, curr_pca.fields.block, to_pca.fields.block);
+            char buf[512];
+            nand_read(buf, curr_pca.pca);
+            nand_write(buf, to_pca.pca);
+            // 3. Update L2P table
+            L2P[lba] = to_pca.pca;
+        }
+        else
+        {
+            printf("Skipping LBA %d\n", lba);
+        }
+    }
+    
+    // 4. Erase the source block with invalid data
+    nand_erase(max_invalid_block);
+    return 0;
 }
 
 static int ssd_resize(size_t new_size)
@@ -169,7 +264,8 @@ static int nand_erase(int block)
 static unsigned int get_next_pca()
 {
     /*  TODO: seq A, need to change to seq B */
-	
+	/* DONE */
+    
      if (curr_pca.pca == INVALID_PCA)
     {
         //init
@@ -183,7 +279,6 @@ static unsigned int get_next_pca()
         return FULL_PCA;
     }
     
-    //
     if ( curr_pca.fields.page == (NAND_SIZE_KB * 1024 / 512)-1)
     {
         curr_pca.fields.block += 1;
@@ -212,8 +307,8 @@ static int ftl_read( char* buf, size_t lba)
     
     if (pca.pca == INVALID_PCA)
     {
-        printf(" --> Read fail !!!");
-        return -EINVAL;
+        // no data
+        return 0;
     }
     else
     {
@@ -224,16 +319,28 @@ static int ftl_read( char* buf, size_t lba)
 static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
 {
     /*  TODO: only basic write case, need to consider other cases */
+    /* DONE */
     PCA_RULE pca;
     pca.pca = get_next_pca();
-
+    
     if (pca.pca == FULL_PCA)
     {
+        printf(" ---------------PCA is full----------------\n");
+        // pca is full, need to do garbage collection
+        ftl_gc();
+        pca.pca = get_next_pca();
         return -ENOMEM;
     }
     
     if (nand_write(buf, pca.pca) > 0)
     {   
+        if (L2P[lba] != INVALID_PCA)    //address not clear 
+        {
+            PCA_RULE tmp_pca;
+            tmp_pca.pca = L2P[lba];
+            /* mark dirty block*/
+            invalid_counts[tmp_pca.fields.block]++;
+        }
         L2P[lba] = pca.pca;
         return 512;
     }
@@ -340,39 +447,57 @@ static int ssd_do_read(char* buf, size_t size, off_t offset)
 static int ssd_read(const char* path, char* buf, size_t size,
                     off_t offset, struct fuse_file_info* fi)
 {
+    printf(" --> Read size: %ld, offset: %ld\n", size, offset);
     (void) fi;
     if (ssd_file_type(path) != SSD_FILE)
     {
         return -EINVAL;
     }
-    return ssd_do_read(buf, size, offset);
+    
+    int result = ssd_do_read(buf, size, offset);
+    get_most_invalid_block();
+    return result;
 }
 
 static int ssd_do_write(const char* buf, size_t size, off_t offset)
 {
     /*  TODO: only basic write case, need to consider other cases */
-	
-    int tmp_lba, tmp_lba_range, process_size;
-    int idx, curr_size, remain_size, rst;
+    /* DONE */
+    
+    
+    // 1. align offset
+    // 2. align size
+    
+    int tmp_lba, tmp_lba_range, processed_size;
+    int idx, remaining_size, rst;
 
     host_write_size += size;
     if (ssd_expand(offset + size) != 0)
     {
         return -ENOMEM;
     }
-
+    
     tmp_lba = offset / 512;
     tmp_lba_range = (offset + size - 1) / 512 - (tmp_lba) + 1;
 
-    process_size = 0;
-    remain_size = size;
-    curr_size = 0;
+    processed_size = 0;
+    remaining_size = size;
+    
     for (idx = 0; idx < tmp_lba_range; idx++)
-    {
+    {   
         /*  example only align 512, need to implement other cases  */
-        if(offset % 512 == 0 && size % 512 == 0)
+        // case 1 : offset is not aligned
+        // case 2 : size is not aligned
+        
+        int aligned_offset = offset % 512;
+        int aligned_size = 512 - aligned_offset;
+        int writing_size = aligned_size < remaining_size ? aligned_size : remaining_size;
+        
+        // write data to ftl
+        if (aligned_offset == 0 && writing_size == 512)
         {
-            rst = ftl_write(buf + process_size, 1, tmp_lba + idx);
+            // Aligned to 512B, send FTL-write API by LBA
+            rst = ftl_write(buf + processed_size, writing_size, tmp_lba + idx);
             if ( rst == 0 )
             {
                 //write full return -enomem;
@@ -383,15 +508,27 @@ static int ssd_do_write(const char* buf, size_t size, off_t offset)
                 //error
                 return rst;
             }
-            curr_size += 512;
-            remain_size -= 512;
-            process_size += 512;
-            offset += 512;
         }
-        else{
-            printf(" --> Not align 512 !!!");
-            return -EINVAL;
+        else
+        {
+            // Not aligned to 512B, read data from FTL
+            char* read_buf = calloc(512, sizeof(char));
+            rst = ftl_read(read_buf, tmp_lba + idx);
+            if (rst < 0)
+            {
+                free(read_buf);
+                return rst;
+            }
+
+            memcpy(read_buf + aligned_offset, buf + processed_size, writing_size);
+
+            rst = ftl_write(read_buf, 512, tmp_lba + idx);
+            free(read_buf);
         }
+        
+        remaining_size -= writing_size;
+        processed_size += writing_size;
+        offset += writing_size;
     }
 
     return size;
@@ -405,7 +542,10 @@ static int ssd_write(const char* path, const char* buf, size_t size,
     {
         return -EINVAL;
     }
-    return ssd_do_write(buf, size, offset);
+    
+    int result = ssd_do_write(buf, size, offset);
+    get_most_invalid_block();
+    return result;
 }
 
 static int ssd_truncate(const char* path, off_t size,
@@ -485,7 +625,7 @@ int main(int argc, char* argv[])
 	nand_write_size = 0;
 	host_write_size = 0;
     curr_pca.pca = INVALID_PCA;
-    L2P = malloc(LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512 * sizeof(int));
+    L2P = malloc(LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512 * sizeof(int));  // 5 * 10 * 1024 / 512 = 100
     memset(L2P, INVALID_PCA, sizeof(int)*LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512);
     
     //create nand file
