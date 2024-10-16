@@ -53,18 +53,6 @@ static int nand_erase(int block);
 static int get_most_invalid_block()
 {
     int max_invalid_block = 0;
-    int invalid_counts[PHYSICAL_NAND_NUM];
-    for (int i = 0; i < PHYSICAL_NAND_NUM; i++) invalid_counts[i] = 0;
-    
-    // count invalid pages
-    for (int i = 0; i < L2P_SIZE; i++)
-    {
-        if (L2P[i] == INVALID_PCA)
-        {
-            int block = i / PAGE_PER_BLOCK;
-            invalid_counts[block]++;
-        }
-    }
     
     // find the most dirty block
     for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
@@ -93,19 +81,8 @@ static int ftl_gc()
     // 1. Decide the source block to be erased
     // by choosing the most dirty block (the block with the most invalid data)    
     
+    printf("-----------------Garbage Collection-----------------\n");
     int max_invalid_block = 0;
-    int invalid_counts[PHYSICAL_NAND_NUM];
-    for (int i = 0; i < PHYSICAL_NAND_NUM; i++) invalid_counts[i] = 0;
-    
-    // count invalid pages
-    for (int i = 0; i < L2P_SIZE; i++)
-    {
-        if (L2P[i] == INVALID_PCA)
-        {
-            int block = i / PAGE_PER_BLOCK;
-            invalid_counts[block]++;
-        }
-    }
     
     // find the most dirty block
     for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
@@ -124,7 +101,6 @@ static int ftl_gc()
     PCA_RULE to_pca;
     to_pca.fields.block = reserve_block;
     to_pca.fields.page = 0;
-    
     
     for (int i = 0; i < PAGE_PER_BLOCK; i++)
     {
@@ -147,6 +123,7 @@ static int ftl_gc()
     
     // 4. Erase the source block with invalid data
     nand_erase(max_invalid_block);
+    invalid_counts[max_invalid_block] = 0;
     return 0;
 }
 
@@ -285,7 +262,7 @@ static unsigned int get_next_pca()
     }
     curr_pca.fields.page = (curr_pca.fields.page + 1 ) % (NAND_SIZE_KB * 1024 / 512);
 
-    if ( curr_pca.fields.block >= PHYSICAL_NAND_NUM)
+    if ( curr_pca.fields.block >= PHYSICAL_NAND_NUM - 1)
     {
         printf("No new PCA\n");
         curr_pca.pca = FULL_PCA;
@@ -334,6 +311,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     
     if (nand_write(buf, pca.pca) > 0)
     {   
+        // update L2P table, point to new pca
         if (L2P[lba] != INVALID_PCA)    //address not clear 
         {
             PCA_RULE tmp_pca;
@@ -627,6 +605,7 @@ int main(int argc, char* argv[])
     curr_pca.pca = INVALID_PCA;
     L2P = malloc(LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512 * sizeof(int));  // 5 * 10 * 1024 / 512 = 100
     memset(L2P, INVALID_PCA, sizeof(int)*LOGICAL_NAND_NUM * NAND_SIZE_KB * 1024 / 512);
+    // for (int i = 0; i < LOGICAL_NAND_NUM; i++) invalid_counts[i] = PAGE_PER_BLOCK; 
     
     //create nand file
     for (idx = 0; idx < PHYSICAL_NAND_NUM; idx++)
