@@ -50,6 +50,35 @@ static int nand_write(const char* buf, int pca);
 static int nand_read(char* buf, int pca);
 static int nand_erase(int block);
 
+static int find_empty_block()
+{
+    int is_blocks_empty[PHYSICAL_NAND_NUM] = {1};
+    
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        is_blocks_empty[i] = (invalid_counts[i] == 0);
+    }
+    
+    for (int i = 0; i < L2P_SIZE; i++)
+    {
+        if (L2P[i] != INVALID_PCA)
+        {
+            PCA_RULE tmp_pca;
+            tmp_pca.pca = L2P[i];
+            is_blocks_empty[tmp_pca.fields.block] = 0;
+        }
+    }
+    
+    for (int i = 0; i < PHYSICAL_NAND_NUM; i++)
+    {
+        if (is_blocks_empty[i] && i != reserve_block)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int get_most_invalid_block()
 {
     int max_invalid_block = 0;
@@ -124,6 +153,16 @@ static int ftl_gc()
     // 4. Erase the source block with invalid data
     nand_erase(max_invalid_block);
     invalid_counts[max_invalid_block] = 0;
+    
+    //5. Update the reserve block
+    reserve_block = max_invalid_block;
+    curr_pca.pca = to_pca.pca;
+    if (to_pca.fields.page >= PAGE_PER_BLOCK){
+        printf("After GC -> SSD STILL FULL\n");
+        curr_pca.pca = FULL_PCA;
+        return FULL_PCA;
+    }
+    
     return 0;
 }
 
@@ -256,20 +295,26 @@ static unsigned int get_next_pca()
         return FULL_PCA;
     }
     
-    if ( curr_pca.fields.page == (NAND_SIZE_KB * 1024 / 512)-1)
+    if (curr_pca.fields.page == (NAND_SIZE_KB * 1024 / 512)-1)
     {
-        curr_pca.fields.block += 1;
-    }
-    curr_pca.fields.page = (curr_pca.fields.page + 1 ) % (NAND_SIZE_KB * 1024 / 512);
-
-    if ( curr_pca.fields.block >= PHYSICAL_NAND_NUM - 1)
-    {
-        printf("No new PCA\n");
-        curr_pca.pca = FULL_PCA;
-        return FULL_PCA;
+        int next_block = find_empty_block();
+        if (next_block == -1)
+        {
+            printf("SSD is full\n");
+            curr_pca.pca = FULL_PCA;
+            return FULL_PCA;
+        }
+        else
+        {
+            curr_pca.fields.page = 0;
+            curr_pca.fields.block = next_block;
+            printf("PCA = page %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
+            return curr_pca.pca;
+        }
     }
     else
     {
+        curr_pca.fields.page++;
         printf("PCA = page %d, nand %d\n", curr_pca.fields.page, curr_pca.fields.block);
         return curr_pca.pca;
     }
@@ -304,7 +349,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
     {
         printf(" ---------------PCA is full----------------\n");
         // pca is full, need to do garbage collection
-        ftl_gc();
+        if (ftl_gc() == FULL_PCA) return -ENOMEM;
         pca.pca = get_next_pca();
         return -ENOMEM;
     }
@@ -317,6 +362,7 @@ static int ftl_write(const char* buf, size_t lba_rnage, size_t lba)
             PCA_RULE tmp_pca;
             tmp_pca.pca = L2P[lba];
             /* mark dirty block*/
+            
             invalid_counts[tmp_pca.fields.block]++;
         }
         L2P[lba] = pca.pca;
